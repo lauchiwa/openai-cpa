@@ -55,6 +55,7 @@ local_microsoft:
   master_email: ""
   client_id: ""
   refresh_token: ""
+  pool_fission: false
 
 # [模式 "freemail" 专属]
 freemail:
@@ -96,7 +97,11 @@ luckmail:
   email_type: ms_graph
   variant_mode: ''
   reuse_purchased: true
-  tag_id: 
+  tag_id:
+
+temporam:
+  cookie: ''
+
 # [代理配置]
 # openai注册时代理地址，例子：http://127.0.0.1:7897。如果是国外服务器此项可以不填
 default_proxy: ""
