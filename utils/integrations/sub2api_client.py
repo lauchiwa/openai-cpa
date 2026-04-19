@@ -3,7 +3,7 @@ import logging
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Tuple
-
+from utils import config as cfg
 from curl_cffi import requests as cffi_requests
 
 logger = logging.getLogger(__name__)
@@ -114,7 +114,7 @@ class Sub2APIClient:
         url = f"{self.api_url}/api/v1/admin/accounts/data"
         exported_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         extra = self._build_account_extra(settings)
-
+        proxy_obj = token_data.get("sub2api_proxy")
         account_item = {
             "name": token_data.get("email", "unknown"),
             "platform": "openai",
@@ -142,12 +142,14 @@ class Sub2APIClient:
         if settings["group_ids"]:
             account_item["group_ids"] = settings["group_ids"]
 
+        if proxy_obj and "proxy_key" in proxy_obj:
+            account_item["proxy_key"] = proxy_obj["proxy_key"]
         payload = {
             "data": {
                 "type": "sub2api-data",
                 "version": 1,
                 "exported_at": exported_at,
-                "proxies": [],
+                "proxies": [proxy_obj] if proxy_obj else [],
                 "accounts": [account_item],
             },
             "skip_default_group_bind": not bool(settings["group_ids"]),
@@ -219,8 +221,8 @@ class Sub2APIClient:
     def add_account(self, token_data: Dict[str, Any]) -> Tuple[bool, str]:
         settings = self._get_push_settings()
         refresh_token = token_data.get("refresh_token", "")
-
-        if not refresh_token:
+        proxy_obj = token_data.get("sub2api_proxy")
+        if not refresh_token or proxy_obj:
             return self._import_account(token_data, settings)
 
         url = f"{self.api_url}/api/v1/admin/accounts"
@@ -234,6 +236,9 @@ class Sub2APIClient:
             "rate_multiplier": settings["rate_multiplier"],
             "extra": self._build_account_extra(settings),
         }
+        if proxy_obj and "proxy_key" in proxy_obj:
+            payload["proxy_key"] = proxy_obj["proxy_key"]
+
         if settings["group_ids"]:
             payload["group_ids"] = settings["group_ids"]
 
@@ -310,7 +315,7 @@ class Sub2APIClient:
             response = cffi_requests.post(
                 url,
                 headers=self.headers,
-                json={},
+                json={"model_id": cfg.SUB2API_TEST_MODEL},
                 timeout=60,
                 impersonate="chrome110",
             )
@@ -347,7 +352,7 @@ class Sub2APIClient:
             return "ok", "no terminal SSE event, skipped"
         except Exception as exc:
             logger.warning("Sub2API test_account %s failed: %s", account_id, exc)
-            return "ok", f"test error, skipped: {str(exc)[:120]}"
+            return "ok", f"test error, skipped: {str(exc)}"
 
     def test_connection(self) -> Tuple[bool, str]:
         url = f"{self.api_url}/api/v1/admin/accounts/data"
