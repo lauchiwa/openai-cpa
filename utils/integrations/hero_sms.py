@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 from curl_cffi import requests
 from utils import db_manager
 from utils import config as cfg
+from utils.auth_core import generate_payload
 
 class UserStoppedError(Exception): pass
 def _ssl_verify() -> bool: return True
@@ -18,7 +19,7 @@ def _warn(msg):
 
 def _raise_if_stopped() -> None:
     if getattr(cfg, 'GLOBAL_STOP', False):
-        raise UserStoppedError("stopped_by_user")
+        raise UserStoppedError("stopped")
 
 def _sleep_interruptible(sec: float) -> bool:
     for _ in range(int(sec * 10)):
@@ -26,13 +27,6 @@ def _sleep_interruptible(sec: float) -> bool:
             return True
         time.sleep(0.1)
     return False
-
-def _build_sentinel_for_session(session, flow: str, proxies: Any) -> str:
-    try:
-        from utils.sentinel import get_token
-        return get_token(session, flow, proxies) or ""
-    except Exception:
-        return ""
 
 def _post_with_retry(session, url: str, headers: dict = None, json_body: dict = None, proxies: Any = None,
                      timeout: int = 30, retries: int = 1):
@@ -90,7 +84,8 @@ def _hero_sms_price_cache_ttl_sec() -> int: return 90
 
 def _hero_sms_reuse_ttl_sec() -> int: return 1200
 
-def _hero_sms_reuse_max_uses() -> int: return 2
+def _hero_sms_reuse_max_uses() -> int:
+    return int(getattr(cfg, 'HERO_SMS_REUSE_MAX', 2))
 
 def _hero_sms_mark_ready_enabled() -> bool: return True
 
@@ -345,7 +340,6 @@ def _hero_sms_country_score(
 _HERO_SMS_COUNTRY_NAME_CACHE: Dict[int, str] = {}
 
 def _get_hero_country_names(proxies: Any) -> Dict[int, str]:
-    """获取并缓存国家 ID 到中文名的映射"""
     global _HERO_SMS_COUNTRY_NAME_CACHE
     if _HERO_SMS_COUNTRY_NAME_CACHE:
         return _HERO_SMS_COUNTRY_NAME_CACHE
@@ -355,7 +349,6 @@ def _get_hero_country_names(proxies: Any) -> Dict[int, str]:
         for item in data:
             try:
                 cid = int(item.get("id"))
-                # 优先取 chn (中文)，没有则取 eng (英文)
                 name = item.get("chn") or item.get("eng") or f"未知({cid})"
                 _HERO_SMS_COUNTRY_NAME_CACHE[cid] = name
             except:
@@ -367,7 +360,6 @@ _HERO_SMS_COUNTRY_NAMES_MAP: dict[int, str] = {}
 
 
 def _get_country_names_map(proxies: Any) -> dict[int, str]:
-    """从 getCountries 接口获取 ID 到中文名的映射"""
     global _HERO_SMS_COUNTRY_NAMES_MAP
     if _HERO_SMS_COUNTRY_NAMES_MAP:
         return _HERO_SMS_COUNTRY_NAMES_MAP
@@ -380,7 +372,6 @@ def _get_country_names_map(proxies: Any) -> dict[int, str]:
         for item in data:
             try:
                 cid = int(item.get("id"))
-                # 优先中文，没中文用英文，再没用 ID 兜底
                 name = item.get("chn") or item.get("eng") or f"国家{cid}"
                 mapping[cid] = name
             except:
@@ -398,14 +389,12 @@ def _hero_sms_prices_by_service(
         force_refresh: bool = False,
 ) -> list[dict[str, Any]]:
     svc = str(service_code or "").strip()
-    # 自动转换：如果用户填的是 openai，底层自动查 dr
     search_svc = "dr" if svc.lower() == "openai" else svc
 
     _info(f"正在拉取 [{svc}] (API代号: {search_svc}) 的全球实时库存...")
     if not search_svc:
         return []
 
-    # 1. 检查缓存
     ttl = _hero_sms_price_cache_ttl_sec()
     now = time.time()
     with _HERO_SMS_PRICE_CACHE_LOCK:
@@ -415,10 +404,8 @@ def _hero_sms_prices_by_service(
         if (not force_refresh) and cache_svc == svc and cache_items and (now - cache_at) <= float(ttl):
             return [dict(x) for x in cache_items if isinstance(x, dict)]
 
-    # 2. 获取国家名称映射
     name_map = _get_country_names_map(proxies)
 
-    # 3. 发起价格请求
     ok, text, data = _hero_sms_request(
         "getPrices",
         proxies=proxies,
@@ -437,7 +424,6 @@ def _hero_sms_prices_by_service(
     rows: list[dict[str, Any]] = []
     all_found_codes = set()
 
-    # 4. 解析数据 (兼容 Dict 和 List)
     items_to_parse = []
     if isinstance(data, dict):
         items_to_parse = list(data.items())
@@ -451,17 +437,14 @@ def _hero_sms_prices_by_service(
         if not str(country_key).isdigit(): continue
         cid = int(country_key)
 
-        # 排除黑名单国家 (俄罗斯、中国等)
         if cid in _OPENAI_SMS_BLOCKED_COUNTRY_IDS:
             continue
         if not isinstance(entry, dict): continue
 
-        # 探测当前国家下挂载的所有代码，用于没货时提示用户
         for k in entry.keys():
             if isinstance(entry[k], dict) and "cost" in entry[k]:
                 all_found_codes.add(k)
 
-        # 核心逻辑：尝试匹配代码
         target = entry.get(search_svc) if search_svc in entry else entry
         if isinstance(target, dict) and "cost" in target:
             try:
@@ -470,14 +453,13 @@ def _hero_sms_prices_by_service(
                 if count > 0:
                     rows.append({
                         "country": cid,
-                        "name": name_map.get(cid, f"国家{cid}"),  # 注入中文名
+                        "name": name_map.get(cid, f"国家{cid}"),
                         "cost": cost,
                         "count": count
                     })
             except:
                 continue
 
-    # 5. 排序、缓存并返回
     if rows:
         _info(f"✅ 成功! 获取到 {len(rows)} 个国家的 [{svc}] 库存数据。")
         rows.sort(key=lambda x: (x.get("cost", 999), -x.get("count", 0)))
@@ -628,6 +610,8 @@ def _hero_sms_request(
         params: Optional[Dict[str, Any]] = None,
         timeout: int = 25,
 ) -> tuple[bool, str, Any]:
+    if not getattr(cfg, "HERO_SMS_USE_PROXY", False):
+        proxies = None
     key = _hero_sms_api_key()
     if not key:
         return False, "NO_KEY", None
@@ -709,49 +693,10 @@ def hero_sms_get_balance(proxies: Any = None) -> tuple[float, str]:
     return -1.0, line or "无法解析余额"
 
 def _hero_sms_resolve_service_code(proxies: Any) -> str:
-    global _HERO_SMS_SERVICE_CACHE
+    raw = str(getattr(cfg, 'HERO_SMS_SERVICE', 'dr')).strip()
+    selected = raw if raw else "dr"
 
-    raw = str(cfg.HERO_SMS_SERVICE).strip()
-    if raw and raw.lower() not in {"auto", "openai", "chatgpt", "gpt", "codex"}:
-        return raw
-    if _HERO_SMS_SERVICE_CACHE:
-        return _HERO_SMS_SERVICE_CACHE
-
-    ok, _, data = _hero_sms_request(
-        "getServicesList",
-        proxies=proxies,
-        params={"lang": "en"},
-        timeout=30,
-    )
-    services: List[Dict[str, Any]] = []
-    if ok and isinstance(data, dict):
-        if isinstance(data.get("services"), list):
-            services = [x for x in data.get("services") if isinstance(x, dict)]
-        elif isinstance(data.get("data"), list):
-            services = [x for x in data.get("data") if isinstance(x, dict)]
-
-    selected = ""
-    for item in services:
-        code = str(item.get("code") or item.get("id") or "").strip()
-        name = str(item.get("name") or item.get("title") or item.get("eng") or "").strip()
-        low = f"{code} {name}".lower()
-        if "openai" in low:
-            selected = code
-            break
-    if not selected:
-        for item in services:
-            code = str(item.get("code") or item.get("id") or "").strip()
-            name = str(item.get("name") or item.get("title") or item.get("eng") or "").strip()
-            low = f"{code} {name}".lower()
-            if any(k in low for k in ("chatgpt", "codex", "gpt")):
-                selected = code
-                break
-
-    if not selected:
-        selected = "dr"
-
-    _HERO_SMS_SERVICE_CACHE = selected
-    _info(f"HeroSMS 服务代码: {selected}")
+    _info(f"HeroSMS 使用手动填写的服务代码: {selected}")
     return selected
 
 
@@ -933,7 +878,7 @@ def _hero_sms_poll_code(activation_id: str, proxies: Any) -> str:
     timeout_sec = _hero_sms_poll_timeout_sec()
     interval_sec = 3.0
     progress_sec = 8
-    resend_after_sec = 24  # 24秒后自动触发重发请求
+    resend_after_sec = 24
 
     started_at = time.time()
     next_progress_at = float(progress_sec)
@@ -1014,7 +959,7 @@ def _hero_sms_poll_code(activation_id: str, proxies: Any) -> str:
             next_progress_at += float(progress_sec)
 
         if _sleep_interruptible(interval_sec):
-            raise UserStoppedError("stopped_by_user")
+            raise UserStoppedError("stopped")
 
     _warn(f"HeroSMS 等码最终超时，共等待 {timeout_sec}s 未收到短信")
     return ""
@@ -1024,6 +969,10 @@ def _try_verify_phone_via_hero_sms(
         *,
         proxies: Any,
         hint_url: str = "",
+        device_id: str = "",
+        user_agent: str = "",
+        run_ctx: dict = None,
+        proxy: Optional[str] = None,
 ) -> tuple[bool, str]:
     if not _hero_sms_enabled():
         return False, "HeroSMS 未配置 API Key 或HeroSMS主开关未开启，如果不想花钱接码请忽略该条提示"
@@ -1032,7 +981,6 @@ def _try_verify_phone_via_hero_sms(
     last_reason = "HeroSMS 手机验证失败"
     lock_acquired = False
 
-    # 强制开启排队机制防止高并发堵死接码口
     serial_on = True
     wait_sec = 180
     verify_balance_start = -1.0
@@ -1064,7 +1012,16 @@ def _try_verify_phone_via_hero_sms(
                 "accept": "application/json",
                 "content-type": "application/json",
             }
-            send_sentinel = _build_sentinel_for_session(session, "authorize_continue", proxies)
+
+            send_sentinel = generate_payload(
+                did=device_id,
+                flow="authorize_continue",
+                proxy=proxy,
+                user_agent=user_agent,
+                impersonate="chrome110",
+                ctx=run_ctx
+            )
+
             if send_sentinel:
                 send_headers["openai-sentinel-token"] = send_sentinel
 
@@ -1111,7 +1068,15 @@ def _try_verify_phone_via_hero_sms(
                 "accept": "application/json",
                 "content-type": "application/json",
             }
-            verify_sentinel = _build_sentinel_for_session(session, "authorize_continue", proxies)
+            verify_sentinel = generate_payload(
+                did=device_id,
+                flow="authorize_continue",
+                proxy=proxy,
+                user_agent=user_agent,
+                impersonate="chrome110",
+                ctx=run_ctx
+            )
+
             if verify_sentinel:
                 verify_headers["openai-sentinel-token"] = verify_sentinel
 
@@ -1277,10 +1242,10 @@ def _try_verify_phone_via_hero_sms(
                         _warn(f"当前国家无号，自动重选国家: {country_id} -> {next_country}")
                         country_id = next_country
                         if _sleep_interruptible(0.3):
-                            raise UserStoppedError("stopped_by_user")
+                            raise UserStoppedError("stopped")
                         continue
                 if _sleep_interruptible(1.2):
-                    raise UserStoppedError("stopped_by_user")
+                    raise UserStoppedError("stopped")
                 continue
 
             _info(

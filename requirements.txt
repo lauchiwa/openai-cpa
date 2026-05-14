@@ -14,3 +14,6 @@ google-auth-oauthlib
 docker
 pymysql
 cryptography
+cachetools
+dnspython
+psutil

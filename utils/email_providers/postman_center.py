@@ -40,17 +40,21 @@ class PostmanFleet:
 
     def clear_fleet(self):
         with self.fleet_lock:
+            for master_email, stop_event in self.postman_signals.items():
+                stop_event.set()
+
+            self.postman_signals.clear()
             self.active_mailboxes.clear()
-            print(f"[{cfg.ts()}] [INFO] 🛑 邮局总管已下达停工令，所有邮递员准备下班。")
+            print(f"[{cfg.ts()}] [INFO] 🛑 邮局总管已下达停工令，本轮所有邮递员已下班。")
 
     def add_mailbox_listener(self, ms_service, master_mailbox):
         master_email = master_mailbox.get('master_email') or master_mailbox.get('email')
         from utils.email_providers.mail_service import mask_email
+
         with self.fleet_lock:
             if master_email in self.postman_signals:
-                print(f"[{cfg.ts()}] [INFO] 🔄 发现老邮递员 ({mask_email(master_email)})，正在让其下班休息...")
-                self.postman_signals[master_email].set()
-                del self.postman_signals[master_email]
+                return
+
             stop_event = threading.Event()
             self.postman_signals[master_email] = stop_event
 
@@ -60,7 +64,6 @@ class PostmanFleet:
             daemon=True
         )
         t.start()
-
         print(f"[{cfg.ts()}] [INFO] 📮 派发新邮递员！开始专属监听: {mask_email(master_email)}")
 
     def _exclusive_postman_worker(self, ms_service, master_mailbox, stop_event):
@@ -79,14 +82,28 @@ class PostmanFleet:
 
                     recs = [r.get('emailAddress', {}).get('address', '').lower() for r in m.get('toRecipients', [])]
                     body = m.get('body', {}).get('content', '')
+                    subject = m.get('subject', '')
                     code = None
 
-                    direct = re.findall(r"Your ChatGPT code is (\d{6})", body, re.I)
-                    if direct:
-                        code = direct[-1]
+                    new_format = re.findall(r"enter this code:\s*(\d{6})", body, re.I)
+                    if not new_format:
+                        new_format = re.findall(r"verification code to continue:\s*(\d{6})", body, re.I)
+                    if not new_format:
+                        new_format = re.findall(r"输入此(?:临时)?验证码以继续[：:]\s*(\d{6})", body, re.I)
+
+                    if new_format:
+                        code = new_format[-1]
                     else:
-                        generic = re.findall(r"\b(\d{6})\b", body)
-                        if generic: code = generic[-1]
+                        direct = re.findall(r"Your (?:ChatGPT|OpenAI) code is (\d{6})", body, re.I)
+                        if direct:
+                            code = direct[-1]
+                        else:
+                            subject_lower = subject.lower()
+                            body_lower = body.lower()
+                            if "chatgpt" in subject_lower or "openai" in subject_lower or "chatgpt" in body_lower or "openai" in body_lower:
+                                generic = re.findall(r"(?<!\d)(\d{6})(?!\d)", body)
+                                if generic:
+                                    code = generic[-1]
 
                     if code:
                         with code_pool_lock:

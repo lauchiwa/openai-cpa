@@ -24,3 +24,12 @@ data
 utils/auth_core/
 !utils/auth_core.pyd
 test.py
+test_register.py
+test_register2.py
+test_register3.py
+aitest.py
+register.py.bak
+.codex/
+AGENTS.md
+stop_openai_cpa.ps1
+code.py
