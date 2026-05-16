@@ -178,7 +178,7 @@ def init_config():
                 print(f"[{ts()}] [WARNING] 自动补全配置文件写入失败: {e}")
 
     return user_config
-APP_VERSION = "v14.4.3"
+APP_VERSION = "v14.4.4"
 _c: dict = {}
 WEB_PASSWORD: str = "admin"
 RETAIN_REG_ONLY: bool = False
@@ -306,6 +306,7 @@ HERO_SMS_MAX_PRICE: float = 2.0
 HERO_SMS_MIN_BALANCE: float = 2.0
 HERO_SMS_MAX_TRIES: int = 3
 HERO_SMS_POLL_TIMEOUT_SEC: int = 120
+HERO_SMS_USE_PROXY: bool = False
 
 # SmsBower
 SMSBOWER_ENABLED = False
@@ -322,7 +323,7 @@ SMSBOWER_MAX_TRIES = 3
 SMSBOWER_POLL_TIMEOUT_SEC = 180
 SMSBOWER_MIN_PRICE = 0.05
 SMSBOWER_OPERATOR = ""
-SMSBOWER_USE_PROXY = False
+SMSBOWER_USE_PROXY: bool = False
 
 # 5SIM
 FIVESIM_ENABLED = False
@@ -338,6 +339,7 @@ FIVESIM_MIN_BALANCE = 10.0
 FIVESIM_MAX_TRIES = 3
 FIVESIM_POLL_TIMEOUT_SEC = 180
 FIVESIM_OPERATOR = ""
+FIVESIM_USE_PROXY: bool = False
 
 NORMAL_SLEEP_MIN: int = 5
 NORMAL_SLEEP_MAX: int = 30
@@ -361,6 +363,15 @@ TG_BOT: dict = {"enable": False, "token": "", "chat_id": ""}
 CLUSTER_NODE_NAME: str = ""
 CLUSTER_MASTER_URL: str = ""
 CLUSTER_SECRET: str = "wenfxl666"
+CLUSTER_UPLOAD_TIMEOUT_SEC: int = 15
+CLUSTER_SYNC_SHARED_DIR: str = "data/cluster_sync"
+CLUSTER_SYNC_IMPORT_POLL_SEC: int = 2
+CLUSTER_SYNC_MAX_RETRIES: int = 3
+CLUSTER_SYNC_PROGRESS_FLUSH_EVERY: int = 100
+CLUSTER_SYNC_STALE_FILE_MAX_AGE_HOURS: int = 12
+CLUSTER_SYNC_MAX_FILE_SIZE_MB: int = 20
+CLUSTER_SYNC_MAX_RECORDS: int = 100000
+CLUSTER_SYNC_REQUIRE_CUSTOM_SECRET: bool = True
 TEMPORAM_COOKIE: str = ""
 FVIA_TOKEN: str = ""
 TMAILOR_CURRENT_TOKEN: str = ""
@@ -450,7 +461,7 @@ def reload_all_configs(new_config_dict=None):
     global LUCKMAIL_API_KEY, LUCKMAIL_PREFERRED_DOMAIN, LUCKMAIL_EMAIL_TYPE, LUCKMAIL_VARIANT_MODE, LUCKMAIL_REUSE_PURCHASED, LUCKMAIL_TAG_ID
     global HERO_SMS_ENABLED, HERO_SMS_API_KEY, HERO_SMS_BASE_URL, HERO_SMS_COUNTRY, HERO_SMS_SERVICE
     global HERO_SMS_AUTO_PICK_COUNTRY, HERO_SMS_REUSE_PHONE, HERO_SMS_MAX_PRICE, HERO_SMS_VERIFY_ON_REGISTER
-    global HERO_SMS_MIN_BALANCE, HERO_SMS_MAX_TRIES, HERO_SMS_POLL_TIMEOUT_SEC
+    global HERO_SMS_MIN_BALANCE, HERO_SMS_MAX_TRIES, HERO_SMS_POLL_TIMEOUT_SEC, HERO_SMS_USE_PROXY
     global AI_API_BASE, AI_API_KEY, AI_MODEL, AI_ENABLE_PROFILE
     global CPA_AUTO_CHECK, SUB2API_AUTO_CHECK
     global TG_BOT
@@ -461,6 +472,8 @@ def reload_all_configs(new_config_dict=None):
     global DUCKMAIL_FORWARD_MODE, DUCKMAIL_FORWARD_EMAIL
     global DUCK_USE_PROXY
     global CLUSTER_NODE_NAME, CLUSTER_MASTER_URL, CLUSTER_SECRET, CLUSTER_UPLOAD_TIMEOUT_SEC
+    global CLUSTER_SYNC_SHARED_DIR, CLUSTER_SYNC_IMPORT_POLL_SEC, CLUSTER_SYNC_MAX_RETRIES, CLUSTER_SYNC_PROGRESS_FLUSH_EVERY
+    global CLUSTER_SYNC_STALE_FILE_MAX_AGE_HOURS, CLUSTER_SYNC_MAX_FILE_SIZE_MB, CLUSTER_SYNC_MAX_RECORDS, CLUSTER_SYNC_REQUIRE_CUSTOM_SECRET
     global REG_MODE
     global LOCAL_MS_ENABLE_FISSION, LOCAL_MS_MASTER_EMAIL, LOCAL_MS_PASSWORD, LOCAL_MS_CLIENT_ID, LOCAL_MS_REFRESH_TOKEN, LOCAL_MS_POOL_FISSION
     global LOCAL_MS_SUFFIX_MODE, LOCAL_MS_SUFFIX_LEN_MIN, LOCAL_MS_SUFFIX_LEN_MAX
@@ -476,7 +489,7 @@ def reload_all_configs(new_config_dict=None):
     global FIVESIM_ENABLED, FIVESIM_API_KEY, FIVESIM_SERVICE, FIVESIM_COUNTRY
     global FIVESIM_AUTO_PICK_COUNTRY, FIVESIM_VERIFY_ON_REGISTER, FIVESIM_REUSE_PHONE
     global FIVESIM_MAX_PRICE, FIVESIM_MIN_PRICE, FIVESIM_MIN_BALANCE, FIVESIM_OPERATOR
-    global FIVESIM_MAX_TRIES, FIVESIM_POLL_TIMEOUT_SEC
+    global FIVESIM_MAX_TRIES, FIVESIM_POLL_TIMEOUT_SEC, FIVESIM_USE_PROXY
     global SMSBOWER_REUSE_PHONE, SMSBOWER_REUSE_MAX
     global HERO_SMS_REUSE_PHONE, HERO_SMS_REUSE_MAX
     global FIVESIM_REUSE_PHONE, FIVESIM_REUSE_MAX
@@ -820,7 +833,6 @@ def reload_all_configs(new_config_dict=None):
     HERO_SMS_VERIFY_ON_REGISTER = _hero_sms_conf.get("verify_on_register", False)
     HERO_SMS_USE_PROXY = safe_bool(_hero_sms_conf.get("use_proxy", False), default=False)
     HERO_SMS_REUSE_MAX = safe_int(_hero_sms_conf.get("reuse_max", 2), default=2)
-
     try:
         HERO_SMS_MAX_PRICE = float(_hero_sms_conf.get("max_price", 2.0))
     except:
@@ -876,7 +888,6 @@ def reload_all_configs(new_config_dict=None):
     FIVESIM_REUSE_MAX = safe_int(_fivesim.get("reuse_max", 2), default=2)
     FIVESIM_OPERATOR = str(_fivesim.get("operator", ) or "").strip()
 
-
     _ai = _c.get("ai_service", {})
     AI_API_BASE = str(_ai.get("api_base", "https://api.openai.com/v1")).strip().rstrip("/")
     AI_API_KEY = _ai.get("api_key", "")
@@ -911,6 +922,14 @@ def reload_all_configs(new_config_dict=None):
     CLUSTER_MASTER_URL = str(_c.get("cluster_master_url", "")).strip().rstrip("/")
     CLUSTER_SECRET = str(_c.get("cluster_secret", "wenfxl666")).strip()
     CLUSTER_UPLOAD_TIMEOUT_SEC = min(3600, safe_int(_c.get("cluster_upload_timeout_sec", 15), 15, minimum=15))
+    CLUSTER_SYNC_SHARED_DIR = str(_c.get("cluster_sync_shared_dir", "data/cluster_sync") or "data/cluster_sync").strip() or "data/cluster_sync"
+    CLUSTER_SYNC_IMPORT_POLL_SEC = safe_int(_c.get("cluster_sync_import_poll_sec", 2), 2, minimum=1)
+    CLUSTER_SYNC_MAX_RETRIES = safe_int(_c.get("cluster_sync_max_retries", 3), 3, minimum=0)
+    CLUSTER_SYNC_PROGRESS_FLUSH_EVERY = safe_int(_c.get("cluster_sync_progress_flush_every", 100), 100, minimum=1)
+    CLUSTER_SYNC_STALE_FILE_MAX_AGE_HOURS = safe_int(_c.get("cluster_sync_stale_file_max_age_hours", 12), 12, minimum=1)
+    CLUSTER_SYNC_MAX_FILE_SIZE_MB = safe_int(_c.get("cluster_sync_max_file_size_mb", 20), 20, minimum=1)
+    CLUSTER_SYNC_MAX_RECORDS = safe_int(_c.get("cluster_sync_max_records", 100000), 100000, minimum=1)
+    CLUSTER_SYNC_REQUIRE_CUSTOM_SECRET = safe_bool(_c.get("cluster_sync_require_custom_secret", True), default=True)
 
     REG_MODE = str(_c.get("reg_mode", "protocol")).strip().lower()
 
